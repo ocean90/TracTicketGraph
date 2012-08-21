@@ -29,11 +29,20 @@ jQuery(document).ready(function($) {
 			bars: barSettings,
 			color: '#458b00',
 			stack: true
+		},
+		{
+			data: openTickets,
+			label: 'Open tickets',
+			yaxis: 2,
+			lines: { show: true, steps: false },
+			shadowSize: 0,
+			color: '#333'
 		}
 	],
 	{
 		xaxis: { mode: 'time', minTickSize: [1, "day"] },
 		yaxis: { label: 'Tickets' },
-		legend: { position: 'ne' }
+		y2axis: { min: 0 },
+		legend: { position: 'sw' }
 	});
 });
