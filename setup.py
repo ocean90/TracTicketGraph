@@ -4,14 +4,14 @@ from setuptools import setup
 
 setup(
     name = 'TracTicketGraph',
-    version = '1.0',
+    version = '1.0-wordpress',
     packages = ['ticketgraph'],
     package_data = { 'ticketgraph' : [ 'htdocs/*.*', 'templates/*.*' ] },
 
     author = 'Colin Snover',
     author_email = 'tracplugins@zetafleet.com',
     description = 'Graphs Trac tickets over time',
-    long_description = 'A Trac plugin that displays a visual graph of ticket changes over time.',
+    long_description = 'A Trac plugin that displays a visual graph of ticket changes over time. Modified by Andrew Nacin.',
     license = 'MIT',
     keywords = 'trac plugin ticket statistics graph',
     classifiers = [
