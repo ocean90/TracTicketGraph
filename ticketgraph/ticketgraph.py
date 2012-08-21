@@ -98,6 +98,9 @@ class TicketGraphModule(Component):
             for count, timestamp in cursor:
                 series['closedTickets'][float(timestamp)] = float(count) * -1
 
+            # number of open tickets at the end of the reporting period
+            cursor.execute('SELECT COUNT(*) FROM ticket WHERE status <> \'closed\' AND component = %s', (component,))
+
         else:
             # number of created tickets for the time period, grouped by day (ms)
             cursor.execute('SELECT COUNT(DISTINCT id), CAST(time / 86400000000 as integer) * 86400000 ' \
@@ -122,8 +125,8 @@ class TicketGraphModule(Component):
             for count, timestamp in cursor:
                 series['closedTickets'][float(timestamp)] = float(count) * -1
 
-        # number of open tickets at the end of the reporting period
-        cursor.execute('SELECT COUNT(*) FROM ticket WHERE status <> \'closed\'')
+            # number of open tickets at the end of the reporting period
+            cursor.execute('SELECT COUNT(*) FROM ticket WHERE status <> \'closed\'')
 
         open_tickets = cursor.fetchone()[0]
         open_ts = math.floor(ts_end / 1000)
