@@ -45,6 +45,8 @@ class TicketGraphModule(Component):
     def process_request(self, req):
         req.perm.require('TICKET_GRAPH')
 
+        int_cast = 'UNSIGNED INTEGER' if self.env.config.get('trac', 'database').startswith('mysql:') else 'INTEGER'
+
         days = int(req.args.get('days', 90))
         component = req.args.get('component', '')
 
@@ -72,14 +74,14 @@ class TicketGraphModule(Component):
 
         if component:
             # number of created tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT id), CAST(time / 86400000000 as integer) * 86400000 ' \
+            cursor.execute('SELECT COUNT(DISTINCT id), CAST(time / 86400000000 as ' + int_cast + ') * 86400000 ' \
                            'AS date FROM ticket WHERE time >= %s AND component = %s' \
                            'GROUP BY date ORDER BY date ASC', (ts_start, component))
             for count, timestamp in cursor:
                 series['openedTickets'][float(timestamp)] = float(count)
 
             # number of reopened tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(tc.time / 86400000000 as integer) * 86400000 ' \
+            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(tc.time / 86400000000 as ' + int_cast + ') * 86400000 ' \
                            'AS date FROM ticket_change tc INNER JOIN ticket t ON tc.ticket = t.id ' \
                            'WHERE field = \'status\' AND newvalue = \'reopened\' ' \
                            'AND tc.time >= %s ' \
@@ -89,7 +91,7 @@ class TicketGraphModule(Component):
                 series['reopenedTickets'][float(timestamp)] = float(count)
 
             # number of closed tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(tc.time / 86400000000 as integer) * 86400000 ' \
+            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(tc.time / 86400000000 as ' + int_cast + ') * 86400000 ' \
                            'AS date FROM ticket_change tc INNER JOIN ticket t ON tc.ticket = t.id ' \
                            'WHERE field = \'status\' AND newvalue = \'closed\' ' \
                            'AND tc.time >= %s ' \
@@ -103,14 +105,14 @@ class TicketGraphModule(Component):
 
         else:
             # number of created tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT id), CAST(time / 86400000000 as integer) * 86400000 ' \
+            cursor.execute('SELECT COUNT(DISTINCT id), CAST(time / 86400000000 as ' + int_cast + ') * 86400000 ' \
                            'AS date FROM ticket WHERE time >= %s ' \
                            'GROUP BY date ORDER BY date ASC', (ts_start,))
             for count, timestamp in cursor:
                 series['openedTickets'][float(timestamp)] = float(count)
 
             # number of reopened tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(time / 86400000000 as integer) * 86400000 ' \
+            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(time / 86400000000 as ' + int_cast + ') * 86400000 ' \
                            'AS date FROM ticket_change WHERE field = \'status\' AND newvalue = \'reopened\' ' \
                            'AND time >= %s ' \
                            'GROUP BY date ORDER BY date ASC', (ts_start,))
@@ -118,7 +120,7 @@ class TicketGraphModule(Component):
                 series['reopenedTickets'][float(timestamp)] = float(count)
 
             # number of closed tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(time / 86400000000 as integer) * 86400000 ' \
+            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(time / 86400000000 as ' + int_cast + ') * 86400000 ' \
                            'AS date FROM ticket_change WHERE field = \'status\' AND newvalue = \'closed\' ' \
                            'AND time >= %s ' \
                            'GROUP BY date ORDER BY date ASC', (ts_start,))
