@@ -49,6 +49,7 @@ class TicketGraphModule(Component):
 
         days = int(req.args.get('days', 90))
         component = req.args.get('component', '')
+        type = req.args.get('type','')
 
         # These are in microseconds; the data returned is in milliseconds
         # because it gets passed to flot
@@ -65,6 +66,16 @@ class TicketGraphModule(Component):
             if not cursor.fetchone():
                 component = ''
 
+        if type in ['bug', 'defect']:
+            type = 'defect (bug)'
+        elif type == 'task':
+            type = 'task (blessed)'
+
+        if type:
+            cursor.execute("SELECT name FROM enum WHERE type = 'ticket_type' AND name = %s", (type,))
+            if not cursor.fetchone():
+                type = ''
+
         series = {
             'openedTickets': {},
             'closedTickets': {},
@@ -72,63 +83,46 @@ class TicketGraphModule(Component):
             'reopenedTickets': {}
         }
 
+        args = [ts_start]
+        where = ' '
+
         if component:
-            # number of created tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT id), CAST(time / 86400000000 as ' + int_cast + ') * 86400000 ' \
-                           'AS date FROM ticket WHERE time >= %s AND component = %s' \
-                           'GROUP BY date ORDER BY date ASC', (ts_start, component))
-            for count, timestamp in cursor:
-                series['openedTickets'][float(timestamp)] = float(count)
+            args.append(component)
+            where += 'AND t.component = %s '
 
-            # number of reopened tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(tc.time / 86400000000 as ' + int_cast + ') * 86400000 ' \
-                           'AS date FROM ticket_change tc INNER JOIN ticket t ON tc.ticket = t.id ' \
-                           'WHERE field = \'status\' AND newvalue = \'reopened\' ' \
-                           'AND tc.time >= %s ' \
-                           'AND t.component = %s ' \
-                           'GROUP BY date ORDER BY date ASC', (ts_start, component))
-            for count, timestamp in cursor:
-                series['reopenedTickets'][float(timestamp)] = float(count)
+        if type:
+            args.append(type)
+            where += 'AND t.type = %s '
 
-            # number of closed tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(tc.time / 86400000000 as ' + int_cast + ') * 86400000 ' \
-                           'AS date FROM ticket_change tc INNER JOIN ticket t ON tc.ticket = t.id ' \
-                           'WHERE field = \'status\' AND newvalue = \'closed\' ' \
-                           'AND tc.time >= %s ' \
-                           'AND t.component = %s ' \
-                           'GROUP BY date ORDER BY date ASC', (ts_start, component))
-            for count, timestamp in cursor:
-                series['closedTickets'][float(timestamp)] = float(count) * -1
+        # number of created tickets for the time period, grouped by day (ms)
+        cursor.execute('SELECT COUNT(DISTINCT id), CAST(time / 86400000000 as ' + int_cast + ') * 86400000 ' \
+                       'AS date FROM ticket t WHERE time >= %s' + where +
+                       'GROUP BY date ORDER BY date ASC', args)
+        for count, timestamp in cursor:
+            series['openedTickets'][float(timestamp)] = float(count)
 
-            # number of open tickets at the end of the reporting period
-            cursor.execute('SELECT COUNT(*) FROM ticket WHERE status <> \'closed\' AND component = %s', (component,))
+        # number of reopened tickets for the time period, grouped by day (ms)
+        cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(tc.time / 86400000000 as ' + int_cast + ') * 86400000 ' \
+                       'AS date FROM ticket_change tc INNER JOIN ticket t ON tc.ticket = t.id ' \
+                       'WHERE field = \'status\' AND newvalue = \'reopened\' ' \
+                       'AND tc.time >= %s ' + where + \
+                       'GROUP BY date ORDER BY date ASC', args)
+        for count, timestamp in cursor:
+            series['reopenedTickets'][float(timestamp)] = float(count)
 
-        else:
-            # number of created tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT id), CAST(time / 86400000000 as ' + int_cast + ') * 86400000 ' \
-                           'AS date FROM ticket WHERE time >= %s ' \
-                           'GROUP BY date ORDER BY date ASC', (ts_start,))
-            for count, timestamp in cursor:
-                series['openedTickets'][float(timestamp)] = float(count)
+        # number of closed tickets for the time period, grouped by day (ms)
+        cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(tc.time / 86400000000 as ' + int_cast + ') * 86400000 ' \
+                       'AS date FROM ticket_change tc INNER JOIN ticket t ON tc.ticket = t.id ' \
+                       'WHERE field = \'status\' AND newvalue = \'closed\' ' \
+                       'AND tc.time >= %s ' + where + \
+                       'GROUP BY date ORDER BY date ASC', args)
+        for count, timestamp in cursor:
+            series['closedTickets'][float(timestamp)] = float(count) * -1
 
-            # number of reopened tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(time / 86400000000 as ' + int_cast + ') * 86400000 ' \
-                           'AS date FROM ticket_change WHERE field = \'status\' AND newvalue = \'reopened\' ' \
-                           'AND time >= %s ' \
-                           'GROUP BY date ORDER BY date ASC', (ts_start,))
-            for count, timestamp in cursor:
-                series['reopenedTickets'][float(timestamp)] = float(count)
+        args.pop(0)
 
-            # number of closed tickets for the time period, grouped by day (ms)
-            cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(time / 86400000000 as ' + int_cast + ') * 86400000 ' \
-                           'AS date FROM ticket_change WHERE field = \'status\' AND newvalue = \'closed\' ' \
-                           'AND time >= %s ' \
-                           'GROUP BY date ORDER BY date ASC', (ts_start,))
-            for count, timestamp in cursor:
-                series['closedTickets'][float(timestamp)] = float(count) * -1
-
-            # number of open tickets at the end of the reporting period
-            cursor.execute('SELECT COUNT(*) FROM ticket WHERE status <> \'closed\'')
+        # number of open tickets at the end of the reporting period
+        cursor.execute('SELECT COUNT(*) FROM ticket t WHERE t.status <> \'closed\'' + where, args)
 
         open_tickets = cursor.fetchone()[0]
         open_ts = math.floor(ts_end / 1000)
