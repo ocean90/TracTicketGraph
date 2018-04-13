@@ -1,133 +1,165 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2012 Colin Snover
+# All rights reserved.
+#
+# This software is licensed as described in the file COPYING, which
+# you should have received as part of this distribution.
 
 import datetime
 import math
 import pkg_resources
 
-from genshi.builder import tag
-from trac.core import *
-from trac.ticket import model
-from trac.web import IRequestHandler
-from trac.web.chrome import INavigationContributor, ITemplateProvider, \
-                            add_script, add_script_data
+from trac.config import IntOption
+from trac.core import Component, implements
 from trac.perm import IPermissionRequestor
-from trac.util.datefmt import to_utimestamp, utc
+from trac.ticket import model
+from trac.util.datefmt import to_datetime, to_utimestamp, utc
+from trac.util.html import html
 from trac.util.translation import _
+from trac.web.api import IRequestHandler, _RequestArgs
+from trac.web.chrome import (
+    INavigationContributor, ITemplateProvider, add_script, add_script_data)
+
+MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000L
+MICROSECONDS_PER_DAY = MILLISECONDS_PER_DAY * 1000
+
+
+if not hasattr(_RequestArgs, 'getint'):
+    # Compatibility method, copied from Trac 1.2.
+    from trac.util import as_int
+    from trac.util.translation import tag, tag_
+    from trac.web.api import HTTPBadRequest
+
+    def getint(self, name, default=None, min=None, max=None):
+        """Return the value as an integer. Raise an `HTTPBadRequest`
+        exception if an exception occurs while converting the value
+        to an integer.
+
+        :param name: the name of the request parameter
+        :keyword default: the value to return if the parameter is not
+                          specified
+        :keyword min: lower bound to which the value is limited
+        :keyword max: upper bound to which the value is limited
+        """
+        if name not in self:
+            return default
+        value = as_int(self[name], None, min, max)
+        if value is None:
+            raise HTTPBadRequest(tag_("Invalid value for request argument "
+                                      "%(name)s.", name=tag.em(name)))
+        return value
+
+    _RequestArgs.getint = getint
 
 
 class TicketGraphModule(Component):
-    implements(IPermissionRequestor, IRequestHandler, INavigationContributor, ITemplateProvider)
+
+    implements(INavigationContributor, IPermissionRequestor, IRequestHandler,
+               ITemplateProvider)
+
+    default_daysback = IntOption(
+        'ticketgraph', 'default_daysback', 90,
+        """Default number of days display in the graph.""")
 
     # IPermissionRequestor methods
+
     def get_permission_actions(self):
         return ['TICKET_GRAPH']
 
     # INavigationContributor methods
+
     def get_active_navigation_item(self, req):
         return 'ticketgraph'
 
     def get_navigation_items(self, req):
         if 'TICKET_GRAPH' in req.perm:
             yield ('mainnav', 'ticketgraph',
-                   tag.a(_('Ticket Graph'), href=req.href.ticketgraph()))
+                   html.a(_("Ticket Graph"), href=req.href.ticketgraph()))
 
     # ITemplateProvider methods
+
     def get_htdocs_dirs(self):
-        return [('ticketgraph', pkg_resources.resource_filename(__name__, 'htdocs'))]
+        return [('ticketgraph',
+                 pkg_resources.resource_filename(__name__, 'htdocs'))]
 
     def get_templates_dirs(self):
         return [pkg_resources.resource_filename(__name__, 'templates')]
 
     # IRequestHandler methods
+
     def match_request(self, req):
         return req.path_info == '/ticketgraph'
 
     def process_request(self, req):
         req.perm.require('TICKET_GRAPH')
 
-        int_cast = 'UNSIGNED INTEGER' if self.env.config.get('trac', 'database').startswith('mysql:') else 'INTEGER'
-
-        days = int(req.args.get('days', 90))
+        days_back = req.args.getint('days', self.default_daysback)
         component = req.args.get('component', '')
-        type = req.args.get('type','')
 
-        # These are in microseconds; the data returned is in milliseconds
-        # because it gets passed to flot
-
-        today = datetime.datetime.combine(datetime.date.today(), datetime.time(tzinfo=utc))
-        ts_start = to_utimestamp(today - datetime.timedelta(days=days))
-        ts_end = to_utimestamp(today + datetime.timedelta(days=1))
-
-        db = self.env.get_read_db()
-        cursor = db.cursor()
-
-        if component:
-            cursor.execute('SELECT c.name FROM component c WHERE c.name = %s', (component,))
-            if not cursor.fetchone():
-                component = ''
-
-        if type in ['bug', 'defect']:
-            type = 'defect (bug)'
-        elif type == 'task':
-            type = 'task (blessed)'
-
-        if type:
-            cursor.execute("SELECT name FROM enum WHERE type = 'ticket_type' AND name = %s", (type,))
-            if not cursor.fetchone():
-                type = ''
+        today = datetime.datetime.now(utc)
+        ts_start = to_utimestamp(today - datetime.timedelta(days=days_back))
+        ts_end = to_utimestamp(today)
 
         series = {
             'openedTickets': {},
             'closedTickets': {},
-            'openTickets': {},
-            'reopenedTickets': {}
+            'reopenedTickets': {},
+            'openTickets': {}
         }
 
-        args = [ts_start]
-        where = ' '
+        components = [c.name for c in model.Component.select(self.env)]
+        if component not in components:
+            component = ''
 
-        if component:
-            args.append(component)
-            where += 'AND t.component = %s '
+        with self.env.db_query as db:
+            component_clause = "AND t.component='%s'" % component \
+                               if component else ""
+            # number of created tickets in time period, grouped by day (ms)
+            for tid, timestamp, in db("""
+                    SELECT id, time FROM ticket t
+                    WHERE t.time BETWEEN %%s AND %%s %s
+                    ORDER BY t.time ASC
+                    """ % component_clause, (ts_start, ts_end)):
+                date_ = localize_and_truncate(req, timestamp)
+                series['openedTickets'].setdefault(date_, 0)
+                series['openedTickets'][date_] += 1
 
-        if type:
-            args.append(type)
-            where += 'AND t.type = %s '
+            # number of reopened tickets in time period, grouped by day (ms)
+            for tid, timestamp in db("""
+                    SELECT DISTINCT tc.ticket, tc.time FROM ticket_change tc
+                     INNER JOIN ticket t ON tc.ticket = t.id
+                    WHERE field='status' AND newvalue='reopened'
+                     AND tc.time BETWEEN %%s AND %%s %s
+                    ORDER BY tc.time ASC
+                    """ % component_clause, (ts_start, ts_end)):
+                date_ = localize_and_truncate(req, timestamp)
+                series['reopenedTickets'].setdefault(date_, 0)
+                series['reopenedTickets'][date_] += 1
 
-        # number of created tickets for the time period, grouped by day (ms)
-        cursor.execute('SELECT COUNT(DISTINCT id), CAST(time / 86400000000 as ' + int_cast + ') * 86400000 ' \
-                       'AS date FROM ticket t WHERE time >= %s' + where +
-                       'GROUP BY date ORDER BY date ASC', args)
-        for count, timestamp in cursor:
-            series['openedTickets'][float(timestamp)] = float(count)
+            # number of closed tickets in time period, grouped by day (ms)
+            for count, timestamp in db("""
+                    SELECT DISTINCT tc.ticket, tc.time FROM ticket_change tc
+                     INNER JOIN ticket t ON tc.ticket = t.id
+                    WHERE field='status' AND newvalue='closed'
+                     AND tc.time BETWEEN %%s AND %%s %s
+                    ORDER BY tc.time ASC
+                    """ % component_clause, (ts_start, ts_end)):
+                date_ = localize_and_truncate(req, timestamp)
+                series['closedTickets'].setdefault(date_, 0)
+                series['closedTickets'][date_] -= 1
 
-        # number of reopened tickets for the time period, grouped by day (ms)
-        cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(tc.time / 86400000000 as ' + int_cast + ') * 86400000 ' \
-                       'AS date FROM ticket_change tc INNER JOIN ticket t ON tc.ticket = t.id ' \
-                       'WHERE field = \'status\' AND newvalue = \'reopened\' ' \
-                       'AND tc.time >= %s ' + where + \
-                       'GROUP BY date ORDER BY date ASC', args)
-        for count, timestamp in cursor:
-            series['reopenedTickets'][float(timestamp)] = float(count)
+            # number of open tickets at end of the reporting period
+            open_tickets = 0
+            for open_tickets, in db("""
+                    SELECT COUNT(*) FROM ticket t
+                    WHERE status!='closed' %s
+                    """ % component_clause):
+                break
 
-        # number of closed tickets for the time period, grouped by day (ms)
-        cursor.execute('SELECT COUNT(DISTINCT ticket), CAST(tc.time / 86400000000 as ' + int_cast + ') * 86400000 ' \
-                       'AS date FROM ticket_change tc INNER JOIN ticket t ON tc.ticket = t.id ' \
-                       'WHERE field = \'status\' AND newvalue = \'closed\' ' \
-                       'AND tc.time >= %s ' + where + \
-                       'GROUP BY date ORDER BY date ASC', args)
-        for count, timestamp in cursor:
-            series['closedTickets'][float(timestamp)] = float(count) * -1
-
-        args.pop(0)
-
-        # number of open tickets at the end of the reporting period
-        cursor.execute('SELECT COUNT(*) FROM ticket t WHERE t.status <> \'closed\'' + where, args)
-
-        open_tickets = cursor.fetchone()[0]
-        open_ts = math.floor(ts_end / 1000)
-
-        while open_ts >= math.floor(ts_start / 1000):
+        open_ts = localize_and_truncate(req, ts_end)
+        while open_ts >= localize_and_truncate(req, ts_start):
             if open_ts in series['closedTickets']:
                 open_tickets -= series['closedTickets'][open_ts]
             if open_ts in series['openedTickets']:
@@ -136,19 +168,28 @@ class TicketGraphModule(Component):
                 open_tickets -= series['reopenedTickets'][open_ts]
 
             series['openTickets'][open_ts] = open_tickets
-            open_ts -= 86400000
-
-        components = model.Component.select(self.env)
+            open_ts -= MILLISECONDS_PER_DAY
 
         data = {}
         for i in series:
-            keys = series[i].keys()
-            keys.sort()
-            data[i] = [(k, series[i][k]) for k in keys]
+            data[i] = [(k, series[i][k]) for k in sorted(series[i].keys())]
 
         add_script(req, 'ticketgraph/jquery.flot.min.js')
         add_script(req, 'ticketgraph/jquery.flot.stack.min.js')
+        add_script(req, 'ticketgraph/jquery.flot.time.min.js')
         add_script(req, 'ticketgraph/ticketgraph.js')
         add_script_data(req, data)
 
-        return 'ticketgraph.html', {'days': days, 'component': component, 'components': components}, None
+        return 'ticketgraph.html', {
+            'days': days_back,
+            'component': component,
+            'components': components
+        }, None
+
+
+def localize_and_truncate(req, ts):
+    """Convert to localized timestamp truncated to start of the day."""
+    _epoc = datetime.datetime(1970, 1, 1, tzinfo=req.tz)
+    delta = to_datetime(ts, req.tz) - _epoc
+    ts = delta.days * MILLISECONDS_PER_DAY + delta.seconds * 1000
+    return math.floor(ts / MILLISECONDS_PER_DAY) * MILLISECONDS_PER_DAY

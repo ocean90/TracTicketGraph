@@ -1,9 +1,4 @@
-TracTicketGraph
-===============
+# TracTicketGraph
+A graph illustrating ticket changes over time for Trac 0.12/1.0.
 
-Makes a graph of tickets. Installation w/ easy_install is easy.
-
-License
--------
-
-New BSD License (c) 2012 Colin Snover.
+The plugin is also available on [PyPI](https://pypi.python.org/pypi/TracTicketGraph).

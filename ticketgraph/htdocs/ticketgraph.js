@@ -1,38 +1,37 @@
 jQuery(document).ready(function($) {
-	$('#ticketgraph')
-		.find('input').hide()
-		.end()
-		.find('select').change( function() {
+	$('#ticketgraph').find('input').hide().end()
+		.find('select').change(function() {
 			$('#ticketgraph').submit();
 		});
 
-	var graph = $('#placeholder').width(800).height(500),
-	barSettings = { show: true, barWidth: 86400000 };
-	$.plot($('#placeholder'),
+	var $placeholder = $('#placeholder');
+	$placeholder.width(800).height(500);
+	var barSettings = { show: true, barWidth: 86400000 };
+	$.plot($placeholder,
 	[
 		{
 			data: closedTickets,
-			label: 'Closed tickets',
+			label: 'Closed',
 			bars: barSettings,
 			color: '#8b0000'
 		},
 		{
 			data: openedTickets,
-			label: 'New tickets',
+			label: 'New',
 			bars: barSettings,
 			color: '#66cd00',
 			stack: true
 		},
 		{
 			data: reopenedTickets,
-			label: 'Reopened tickets',
+			label: 'Reopened',
 			bars: barSettings,
 			color: '#458b00',
 			stack: true
 		},
 		{
 			data: openTickets,
-			label: 'Open tickets',
+			label: 'Open',
 			yaxis: 2,
 			lines: { show: true, steps: false },
 			shadowSize: 0,
